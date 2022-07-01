@@ -1,5 +1,6 @@
 package ru.yandex.practicum.filmorate.service;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import ru.yandex.practicum.filmorate.exception.FilmNotFoundException;
@@ -11,10 +12,9 @@ import ru.yandex.practicum.filmorate.storage.LikeStorage;
 
 import java.time.LocalDate;
 import java.time.Month;
-import java.util.Collection;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
-
+@Slf4j
 @Service
 public class FilmService {
     private final FilmStorage filmStorage;
@@ -83,5 +83,85 @@ public class FilmService {
         if (minDate.isAfter(date)) {
             throw new ReleaseDateException("Дата релиза должна быть больше 28 декабря 1895 года");
         }
+    }
+
+    public Collection<Film> getSortedFilmsByDirectorId(Long directorId, Optional<String> sortBy) {
+        Collection<Film> films = null;
+        if (sortBy.isPresent()) {
+            if (sortBy.get().equals("year")) {
+                films = filmStorage.getYearSortedFilmsByDirectorId(directorId);
+            } else if (sortBy.get().equals("likes")) {
+                films =  filmStorage.getLikeSortedFilmsByDirectorId(directorId);
+            }
+        }
+        return films;
+    }
+
+
+
+    private Set<Film> getTopOverCrossingFilms(List<Film> films, List<Long> ids) {
+        log.debug("getTopOverCrossingFilms case, films = {}, ids = {}", films.toString(), ids.toString());
+
+        Set<Film> result = new HashSet<>();
+        for (Long id: ids) {
+            List<Film> tmpList = findLikedByTarget(id);
+            tmpList.removeAll(films);
+            result.addAll(tmpList);
+        }
+        return result;
+    }
+
+    private List<Long> findMatchedUsersId(List<Film> films, Long id) {
+        log.debug("findMatchedUsersId case, films = {}", films.toString());
+
+        List<Long> result = new LinkedList<>();
+        Map<Long,Integer> commonLiked = new TreeMap<>();
+        for (Film film: films) {
+                for (Long like : film.getLikes()) {
+                    if (commonLiked.containsKey(like)) {
+                        commonLiked.put(like, commonLiked.get(like) + 1);
+                    } else {
+                        commonLiked.put(like,  1);
+                    }
+                }
+        }
+        List<Map.Entry<Long,Integer>> entries =  commonLiked.entrySet()
+                .stream().filter(e -> !e.getKey().equals(id))
+                .sorted(Comparator.comparingInt(Map.Entry::getValue))
+                .collect(Collectors.toList());
+        for (Map.Entry<Long,Integer> entry : entries) {
+            result.add(entry.getKey());
+        }
+        return result;
+    }
+
+
+    private List<Film> findLikedByTarget(Long id) {
+        log.debug("findLikedByTarget case, id = {}",id);
+
+        return filmStorage.findAll()
+                .values()
+                .stream()
+                .filter(film -> (film.getLikes() != null))
+                .filter(film -> film.getLikes().contains(id))
+                .collect(Collectors.toList());
+    }
+
+    public Set<Film> findRecommendations(Long id) {
+        log.debug("findRecommendations case, id = {}",id);
+        List<Film> films =  findLikedByTarget(id);
+        List<Long> matchedUsers = findMatchedUsersId(films, id);
+        return getTopOverCrossingFilms(films, matchedUsers);
+    }
+
+
+    public Collection<Film> findCommon(Long userId, Long friendId) {
+        List<Film> userFilms = new ArrayList<>(findLikedByTarget(userId));
+        List<Film> friendFilms = new ArrayList<>(findLikedByTarget(friendId));
+        return userFilms
+                .stream()
+                .filter(friendFilms::contains)
+                .sorted(Comparator.comparingInt(Film::getRate))
+                .collect(Collectors.toCollection(LinkedList::new));
     }
 }
